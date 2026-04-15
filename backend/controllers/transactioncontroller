@@ -1,0 +1,197 @@
+const Transaction = require('../models/transaction');
+const Account = require('../models/account');
+
+// @desc    Deposit money
+// @route   POST /api/transactions/deposit
+exports.deposit = async (req, res) => {
+  try {
+    const { accountId, amount, description } = req.body;
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ success: false, message: 'Please enter a valid amount' });
+    }
+
+    const account = await Account.findOne({ _id: accountId, user: req.user._id });
+    if (!account) {
+      return res.status(404).json({ success: false, message: 'Account not found' });
+    }
+
+    // Update balance
+    account.balance += parseFloat(amount);
+    await account.save();
+
+    // Create transaction record
+    const transaction = await Transaction.create({
+      toAccount: account._id,
+      user: req.user._id,
+      type: 'deposit',
+      amount: parseFloat(amount),
+      description: description || 'Cash Deposit',
+      status: 'completed',
+      balanceAfter: account.balance
+    });
+
+    res.status(201).json({
+      success: true,
+      message: `$${amount} deposited successfully!`,
+      data: {
+        transaction,
+        newBalance: account.balance
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Withdraw money
+// @route   POST /api/transactions/withdraw
+exports.withdraw = async (req, res) => {
+  try {
+    const { accountId, amount, description } = req.body;
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ success: false, message: 'Please enter a valid amount' });
+    }
+
+    const account = await Account.findOne({ _id: accountId, user: req.user._id });
+    if (!account) {
+      return res.status(404).json({ success: false, message: 'Account not found' });
+    }
+
+    if (account.balance < amount) {
+      return res.status(400).json({ success: false, message: 'Insufficient balance' });
+    }
+
+    // Update balance
+    account.balance -= parseFloat(amount);
+    await account.save();
+
+    // Create transaction record
+    const transaction = await Transaction.create({
+      fromAccount: account._id,
+      user: req.user._id,
+      type: 'withdrawal',
+      amount: parseFloat(amount),
+      description: description || 'Cash Withdrawal',
+      status: 'completed',
+      balanceAfter: account.balance
+    });
+
+    res.status(201).json({
+      success: true,
+      message: `$${amount} withdrawn successfully!`,
+      data: {
+        transaction,
+        newBalance: account.balance
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Transfer money between accounts
+// @route   POST /api/transactions/transfer
+exports.transfer = async (req, res) => {
+  try {
+    const { fromAccountId, toAccountNumber, amount, description } = req.body;
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ success: false, message: 'Please enter a valid amount' });
+    }
+
+    // Find sender's account
+    const fromAccount = await Account.findOne({ _id: fromAccountId, user: req.user._id });
+    if (!fromAccount) {
+      return res.status(404).json({ success: false, message: 'Sender account not found' });
+    }
+
+    if (fromAccount.balance < amount) {
+      return res.status(400).json({ success: false, message: 'Insufficient balance' });
+    }
+
+    // Find receiver's account by account number
+    const toAccount = await Account.findOne({ accountNumber: toAccountNumber });
+    if (!toAccount) {
+      return res.status(404).json({ success: false, message: 'Recipient account not found. Please check the account number.' });
+    }
+
+    if (fromAccount.accountNumber === toAccountNumber) {
+      return res.status(400).json({ success: false, message: 'Cannot transfer to the same account' });
+    }
+
+    // Perform transfer
+    fromAccount.balance -= parseFloat(amount);
+    toAccount.balance += parseFloat(amount);
+
+    await fromAccount.save();
+    await toAccount.save();
+
+    // Create transaction record
+    const transaction = await Transaction.create({
+      fromAccount: fromAccount._id,
+      toAccount: toAccount._id,
+      user: req.user._id,
+      type: 'transfer',
+      amount: parseFloat(amount),
+      description: description || `Transfer to ${toAccountNumber}`,
+      status: 'completed',
+      balanceAfter: fromAccount.balance
+    });
+
+    res.status(201).json({
+      success: true,
+      message: `$${amount} transferred successfully to account ${toAccountNumber}!`,
+      data: {
+        transaction,
+        newBalance: fromAccount.balance
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Get transaction history
+// @route   GET /api/transactions/history
+exports.getTransactionHistory = async (req, res) => {
+  try {
+    const { page = 1, limit = 20, type } = req.query;
+
+    const userAccounts = await Account.find({ user: req.user._id });
+    const accountIds = userAccounts.map(acc => acc._id);
+
+    let query = {
+      $or: [
+        { fromAccount: { $in: accountIds } },
+        { toAccount: { $in: accountIds } }
+      ]
+    };
+
+    if (type && type !== 'all') {
+      query.type = type;
+    }
+
+    const transactions = await Transaction.find(query)
+      .populate('fromAccount', 'accountNumber accountType')
+      .populate('toAccount', 'accountNumber accountType')
+      .sort({ createdAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+
+    const total = await Transaction.countDocuments(query);
+
+    res.json({
+      success: true,
+      data: {
+        transactions,
+        totalPages: Math.ceil(total / limit),
+        currentPage: parseInt(page),
+        totalTransactions: total
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
