@@ -11,7 +11,11 @@ connectDB();
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin:"banking-website-moqg7i6x7-mrvaishu69s-projects.vercel.app",
+  methods:["GET","POST","PUT","DELETE"],
+  credentials: true
+}));
 app.use(express.json());
 
 // Welcome Route
